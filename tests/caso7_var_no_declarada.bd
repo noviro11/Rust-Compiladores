@@ -1,0 +1,6 @@
+program p;
+var x : int;
+main {
+    y = 5;
+}
+end

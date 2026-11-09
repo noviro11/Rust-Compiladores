@@ -1,0 +1,6 @@
+program malo;
+main {
+    x = 5 +;
+    y = 2 @ 3;
+}
+end

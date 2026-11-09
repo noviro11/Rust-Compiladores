@@ -1,0 +1,281 @@
+use crate::lexer::Token;
+use crate::cubo_semantico::{Operador, Tipo, TipoRetorno, ErrorUsuario, validar, error_en};
+use crate::directorio::DirFunciones;
+
+grammar(dir: &mut DirFunciones);
+
+
+// ponemos extern para que lalrpop no genere lexico sino tome el que creamos en lexer.rs
+extern {
+    type Location = usize;          // las posiciones son los índices en el texto
+    type Error = ErrorUsuario;      // errores del scanner (Lexico) o de las acciones (Semantico)
+
+    enum Token {
+        // palabras reservadas
+        "program" => Token::Program,
+        "main"    => Token::Main,
+        "end"     => Token::End,
+        "var"     => Token::Var,
+        "int"     => Token::Int,
+        "float"   => Token::Float,
+        "void"    => Token::Void,
+        "print"   => Token::Print,
+        "read"    => Token::Read,
+        "while"   => Token::While,
+        "do"      => Token::Do,
+        "if"      => Token::If,
+        "else"    => Token::Else,
+        // operadores
+        "="  => Token::Asignar,
+        "+"  => Token::Mas,
+        "-"  => Token::Menos,
+        "*"  => Token::Por,
+        "/"  => Token::Entre,
+        ">"  => Token::Mayor,
+        "<"  => Token::Menor,
+        "!=" => Token::Diferente,
+        // delimitadores
+        ";" => Token::PuntoComa,
+        "," => Token::Coma,
+        ":" => Token::DosPuntos,
+        "(" => Token::ParIzq,
+        ")" => Token::ParDer,
+        "{" => Token::LlaveIzq,
+        "}" => Token::LlaveDer,
+        "[" => Token::CorIzq,
+        "]" => Token::CorDer,
+        // tokens con valor: <Tipo> indica el dato que viene dentro
+        "id"         => Token::Id(<String>),
+        "cte_int"    => Token::CteInt(<i64>),
+        "cte_float"  => Token::CteFloat(<f64>),
+        "cte_string" => Token::CteString(<String>),
+    }
+}
+
+// Gramatica
+
+// <Programa> → program id ; <VarsOpt> <ListaFuncs> main <Body> end
+pub Programa: () = {
+    EncabezadoPrograma VarsOpt ListaFuncs "main" Body "end" => (),
+};
+// Separamos la regla ya que al leer 'program nombre ;' debemos crear el Directorio con el alcance global.
+EncabezadoPrograma: () = {
+    "program" <nombre:"id"> ";" => { *dir = DirFunciones::nuevo(&nombre); },
+};
+
+// ======================= Variables =======================
+
+// <VarsOpt> → <Vars> | ε
+VarsOpt: () = {
+    Vars => (),
+    => (),
+};
+
+// <Vars> → var <ListaDecl>
+Vars: () = {
+    "var" ListaDecl => (),
+};
+
+// <ListaDecl> → <ListaDecl> <Decl> | <Decl>
+ListaDecl: () = {
+    ListaDecl Decl => (),
+    Decl => (),
+};
+
+// <Decl> → <ListaIds> : <Type> ;
+Decl: () = {
+    <ids:ListaIds> ":" <t:Type> ";" =>? {
+        for (pos, nombre) in ids {
+            dir.agregar_variable(&nombre, t).map_err(|m| error_en(pos, m))?;
+        }
+        Ok(())
+    },
+};
+
+// <ListaIds> → <ListaIds> , id | id
+ListaIds: Vec<(usize, String)> = {
+    <mut lista:ListaIds> "," <pos:@L> <nombre:"id"> => { lista.push((pos, nombre)); lista },
+    <pos:@L> <nombre:"id"> => vec![(pos, nombre)],
+};
+
+// <Type> → int | float
+Type: Tipo = {
+    "int" => Tipo::Int,
+    "float" => Tipo::Float,
+};
+
+// ======================= Funciones =======================
+
+// <ListaFuncs> → <ListaFuncs> <Funcs> | ε
+ListaFuncs: () = {
+    ListaFuncs Funcs => (),
+    => (),
+};
+
+// <Funcs> → <TipoFunc> id ( <ParamsOpt> ) [ <VarsOpt> <Body> ] ;
+Funcs: () = {
+    EncabezadoFunc "(" ParamsOpt ")" "[" VarsOpt Body "]" ";" => dir.salir_funcion(),
+};
+// Separamos la regla ya que la función se registra antes de leer sus parámetros y su cuerpo.
+EncabezadoFunc: () = {
+    <t:TipoFunc> <pos:@L> <nombre:"id"> =>? dir.agregar_funcion(&nombre, t).map_err(|m| error_en(pos, m)),
+};
+
+// <TipoFunc> → void | <Type>
+TipoFunc: TipoRetorno = {
+    "void" => TipoRetorno::Void,
+    <t:Type> => TipoRetorno::Valor(t),
+};
+
+// <ParamsOpt> → <ListaParams> | ε
+ParamsOpt: () = {
+    ListaParams => (),
+    => (),
+};
+
+// <ListaParams> → <ListaParams> , <Param> | <Param>
+ListaParams: () = {
+    ListaParams "," Param => (),
+    Param => (),
+};
+
+// <Param> → id : <Type>
+Param: () = {
+    <pos:@L> <nombre:"id"> ":" <t:Type> =>? dir.agregar_parametro(&nombre, t).map_err(|m| error_en(pos, m)),
+};
+
+// ======================= Cuerpo y estatutos =======================
+
+// <Body> → { <ListaStmt> }
+Body: () = {
+    "{" ListaStmt "}" => (),
+};
+
+// <ListaStmt> → <ListaStmt> <Statement> | ε
+ListaStmt: () = {
+    ListaStmt Statement => (),
+    => (),
+};
+
+// <Statement> → <Assign> | <Condition> | <Cycle> | <FCall> | <Print> | <Read>
+//             | [ <ListaStmt> ]
+Statement: () = {
+    Assign => (),
+    Condition => (),
+    Cycle => (),
+    FCall => (),
+    Print => (),
+    Read => (),
+    "[" ListaStmt "]" => (),
+};
+
+// <Assign> → id = <Expresion> ;
+Assign: () = {
+    <pos:@L> <nombre:"id"> "=" <valor:Expresion> ";" =>? {
+        let destino = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
+        validar(Operador::Asignar, destino, valor, pos)?;
+        Ok(())
+    },
+};
+
+// <Condition> → if ( <Expresion> ) <Statement> <ElseOpt> ;
+Condition: () = {
+    "if" "(" Expresion ")" Statement ElseOpt ";" => (),
+};
+
+// <ElseOpt> → else <Statement> | ε
+ElseOpt: () = {
+    "else" Statement => (),
+    => (),
+};
+
+// <Cycle> → while ( <Expresion> ) do <Statement> ;
+Cycle: () = {
+    "while" "(" Expresion ")" "do" Statement ";" => (),
+};
+
+// <Print> → print ( <ListaPrint> ) ;
+Print: () = {
+    "print" "(" ListaPrint ")" ";" => (),
+};
+
+// <ListaPrint> → <ListaPrint> , <ElemPrint> | <ElemPrint>
+ListaPrint: () = {
+    ListaPrint "," ElemPrint => (),
+    ElemPrint => (),
+};
+
+// <ElemPrint> → <Expresion> | cte_string
+ElemPrint: () = {
+    Expresion => (),
+    "cte_string" => (),
+};
+
+// <Read> → read ( id ) ;
+Read: () = {
+    "read" "(" <pos:@L> <nombre:"id"> ")" ";" =>? dir.buscar_variable(&nombre).map(|_| ()).map_err(|m| error_en(pos, m)),
+};
+
+// <FCall> → <Llamada> ;          (llamada usada como estatuto)
+FCall: () = {
+    Llamada ";" => (),
+};
+
+// <Llamada> → id ( <ArgsOpt> )    (llamada usada dentro de una expresión)
+Llamada: TipoRetorno = {
+    <pos:@L> <nombre:"id"> "(" ArgsOpt ")" =>? dir.buscar_funcion(&nombre).map(|f| f.tipo_retorno).map_err(|m| error_en(pos, m)),
+};
+
+// <ArgsOpt> → <ListaArgs> | ε
+ArgsOpt: () = {
+    ListaArgs => (),
+    => (),
+};
+
+// <ListaArgs> → <ListaArgs> , <Expresion> | <Expresion>
+ListaArgs: () = {
+    ListaArgs "," Expresion => (),
+    Expresion => (),
+};
+
+// ======================= Expresiones =======================
+
+Expresion: Tipo = {
+    Exp,
+    <l:@L> <izq:Exp> ">"  <der:Exp> =>? validar(Operador::Mayor, izq, der, l),
+    <l:@L> <izq:Exp> "<"  <der:Exp> =>? validar(Operador::Menor, izq, der, l),
+    <l:@L> <izq:Exp> "!=" <der:Exp> =>? validar(Operador::Diferente, izq, der, l),
+};
+
+Exp: Tipo = {
+    <l:@L> <izq:Exp> "+" <der:Termino> =>? validar(Operador::Suma, izq, der, l),
+    <l:@L> <izq:Exp> "-" <der:Termino> =>? validar(Operador::Resta, izq, der, l),
+    Termino,
+};
+
+Termino: Tipo = {
+    <l:@L> <izq:Termino> "*" <der:Factor> =>? validar(Operador::Mult, izq, der, l),
+    <l:@L> <izq:Termino> "/" <der:Factor> =>? validar(Operador::Div, izq, der, l),
+    Factor,
+};
+
+Factor: Tipo = {
+    "(" <Expresion> ")",       // <...> sin nombre = regresa el valor de Expresion
+    "+" <Atomo>,
+    "-" <Atomo>,
+    Atomo,
+    <pos:@L> <r:Llamada> =>? match r {
+        TipoRetorno::Valor(t) => Ok(t),
+        TipoRetorno::Void => Err(error_en(pos, "una función void no regresa valor; no se puede usar en una expresión".to_string())),
+    },
+};
+
+Atomo: Tipo = {
+    <pos:@L> <nombre:"id"> =>? dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m)),
+    Cte,
+};
+
+Cte: Tipo = {
+    "cte_int"   => Tipo::Int,
+    "cte_float" => Tipo::Float,
+};

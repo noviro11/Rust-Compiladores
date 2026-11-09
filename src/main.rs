@@ -1,52 +1,47 @@
-use lalrpop_util::lalrpop_mod;
-use std::io::{self, Write};
+mod analizador;
+mod cubo_semantico;
+mod directorio;
+mod lexer;
 
-lalrpop_mod!(pub calc); // incluye el parser generado desde src/calc.lalrpop
+use lalrpop_util::lalrpop_mod;
+use std::{env, fs, process};
+
+// Incluye el parser que LALRPOP generó a partir de src/baby_duck.lalrpop
+lalrpop_mod!(pub baby_duck);
 
 fn main() {
-    let parser = calc::ExprParser::new();
+    // Uso: cargo run -- <archivo.bd> [--tokens]
+    let args: Vec<String> = env::args().collect();
+    let ruta = args.get(1).unwrap_or_else(|| {
+        eprintln!("uso: cargo run -- <archivo.bd> [--tokens]");
+        process::exit(2);
+    });
+    let fuente = fs::read_to_string(ruta).expect("no se pudo leer el archivo");
 
-    loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
-
-        let mut linea = String::new();
-        if io::stdin().read_line(&mut linea).unwrap() == 0 {
-            break; // fin de la entrada (Ctrl+D)
-        }
-        let linea = linea.trim();
-        if linea == "q" {
-            break;
-        }
-
-        match parser.parse(linea) {
-            Ok(valor) => println!("= {}", valor),
-            Err(e) => println!("error: {}", e),
+    // Opcional: imprimir los tokens (lo que hacía la Parte 1)
+    for resultado in lexer::Lexer::new(&fuente) {
+        match resultado {
+            Ok((inicio, token, fin)) => println!("{:>4}..{:<4} {:?}", inicio, fin, token),
+            Err(e) => {
+                println!("ERROR LÉXICO: {}", e);
+                break;
+            }
         }
     }
-}
+    println!("--------------------------------");
 
-#[cfg(test)]
-mod tests {
-    use super::calc::ExprParser;
-
-    #[test]
-    fn precedencia() {
-        assert_eq!(ExprParser::new().parse("2 + 3 * 4"), Ok(14));
-    }
-
-    #[test]
-    fn parentesis() {
-        assert_eq!(ExprParser::new().parse("(2 + 3) * 4"), Ok(20));
-    }
-
-    #[test]
-    fn asociatividad_izquierda() {
-        assert_eq!(ExprParser::new().parse("10 - 3 - 2"), Ok(5));
-    }
-
-    #[test]
-    fn entrada_invalida() {
-        assert!(ExprParser::new().parse("2 + * 4").is_err());
+    // Parte 2: scanner + parser
+    match analizador::analizar(&fuente) {
+        Ok(dir) => {
+            println!(
+                "OK: '{}' es léxica, sintáctica y semánticamente correcto.",
+                ruta
+            );
+            println!("{:#?}", dir); // imprime el Directorio de Funciones completo
+        }
+        Err(e) => {
+            println!("{}", e);
+            process::exit(1);
+        }
     }
 }

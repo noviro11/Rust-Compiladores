@@ -1,0 +1,6 @@
+program malo;
+var x : int;
+main {
+    x = 5 +;
+}
+end

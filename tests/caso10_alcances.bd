@@ -1,0 +1,26 @@
+program alcances;
+var x : int;
+    z : float;
+
+int cuadrado(x : float) [
+    var r : float;
+    {
+        r = x * x;
+        z = r;
+        cuadrado(2.0);
+    }
+];
+
+void imprime() [
+    {
+        print("x global:", x);
+    }
+];
+
+main {
+    x = 3;
+    read(z);
+    z = cuadrado(1.5) + x;
+    imprime();
+}
+end

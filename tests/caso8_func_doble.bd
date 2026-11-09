@@ -1,0 +1,6 @@
+program p;
+void f() [ { } ];
+void f() [ { } ];
+main {
+}
+end

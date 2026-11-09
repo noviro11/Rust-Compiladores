@@ -1,0 +1,6 @@
+program p;
+var x, y : int;
+    x : float;
+main {
+}
+end

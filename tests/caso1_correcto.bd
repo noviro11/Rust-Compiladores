@@ -1,0 +1,9 @@
+program demo;
+var x, y : int;
+    z : float;
+main {
+    x = 10;
+    z = -3.5 * (x + 2);
+    if (x != 0) [ print("x vale", x); ] else [ print("cero"); ];
+}
+end
