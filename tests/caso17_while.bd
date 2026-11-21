@@ -1,0 +1,12 @@
+program ciclos;
+var i, suma : int;
+main {
+    i = 0;
+    suma = 0;
+    while (i < 5) do [
+        suma = suma + i;
+        i = i + 1;
+    ];
+    print(suma);
+}
+end

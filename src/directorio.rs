@@ -1,7 +1,15 @@
 //  DIRECTORIO DE FUNCIONES y TABLAS DE VARIABLES
 
 use crate::cubo_semantico::{Tipo, TipoRetorno};
+use crate::memoria::{MemoriaVirtual, Recursos};
 use std::collections::HashMap;
+
+// Lo que se guarda de cada variable en su Tabla de Variables.
+#[derive(Debug, Clone, Copy)]
+pub struct Variable {
+    pub tipo: Tipo,
+    pub direccion: usize, // su dirección virtual
+}
 
 // Las partes de la funcion (incluye la "global" osea del programa completo)
 #[derive(Debug)]
@@ -9,7 +17,10 @@ use std::collections::HashMap;
 pub struct Funcion {
     pub tipo_retorno: TipoRetorno,        // Void o Valor(Int/Float)
     pub parametros: Vec<Tipo>,            // parametros de entrada
-    pub variables: HashMap<String, Tipo>, // su Tabla de Variables: nombre → tipo
+    pub variables: HashMap<String, Variable>, // su Tabla de Variables: nombre → (tipo, dirección)
+    pub direccion_retorno: Option<usize>, // variable global donde deja su valor (None si es void)
+    pub inicio: usize,                    // número del cuádruplo donde empieza su código
+    pub recursos: Recursos,               // cuántas locales y temporales usa (tamaño para el ERA)
 }
 // Constructor
 impl Funcion {
@@ -19,6 +30,9 @@ impl Funcion {
             tipo_retorno,
             parametros: Vec::new(),
             variables: HashMap::new(),
+            direccion_retorno: None,
+            inicio: 0,                     // se pone al leer el encabezado de la función
+            recursos: Recursos::default(), // se llena al terminar la función
         }
     }
 }
@@ -46,18 +60,33 @@ impl DirFunciones {
         }
     }
     // Da de alta una función y cambia el alcance actual a esa
-    pub fn agregar_funcion(&mut self, nombre: &str, tipo: TipoRetorno) -> Result<(), String> {
+    pub fn agregar_funcion(
+        &mut self,
+        nombre: &str,
+        tipo: TipoRetorno,
+        memoria: &mut MemoriaVirtual,
+    ) -> Result<(), String> {
         if self.funciones.contains_key(nombre) {
             return Err(format!("la función '{}' ya fue declarada", nombre));
         }
-        self.funciones
-            .insert(nombre.to_string(), Funcion::nueva(tipo));
+        let mut funcion = Funcion::nueva(tipo);
+        // Si regresa un valor, se le reserva una dirección GLOBAL donde lo dejará el return.
+        if let TipoRetorno::Valor(t) = tipo {
+            funcion.direccion_retorno = Some(memoria.nueva_variable(t, true)?);
+        }
+        self.funciones.insert(nombre.to_string(), funcion);
         self.actual = nombre.to_string();
         Ok(())
     }
 
     // Guarda una variable en la tabla del alcance ACTUAL.
-    pub fn agregar_variable(&mut self, nombre: &str, tipo: Tipo) -> Result<(), String> {
+    pub fn agregar_variable(
+        &mut self,
+        nombre: &str,
+        tipo: Tipo,
+        memoria: &mut MemoriaVirtual,
+    ) -> Result<(), String> {
+        let es_global = self.actual == self.global;
         let tabla = &mut self
             .funciones
             .get_mut(&self.actual)
@@ -70,13 +99,19 @@ impl DirFunciones {
                 nombre, self.actual
             ));
         }
-        tabla.insert(nombre.to_string(), tipo);
+        let direccion = memoria.nueva_variable(tipo, es_global)?; // global → 1000/2000, local → 3000/4000
+        tabla.insert(nombre.to_string(), Variable { tipo, direccion });
         Ok(())
     }
 
     // Un parámetro es un parametro que ademas se anota como variable local
-    pub fn agregar_parametro(&mut self, nombre: &str, tipo: Tipo) -> Result<(), String> {
-        self.agregar_variable(nombre, tipo)?;
+    pub fn agregar_parametro(
+        &mut self,
+        nombre: &str,
+        tipo: Tipo,
+        memoria: &mut MemoriaVirtual,
+    ) -> Result<(), String> {
+        self.agregar_variable(nombre, tipo, memoria)?;
         self.funciones
             .get_mut(&self.actual)
             .expect("el alcance actual siempre existe")
@@ -86,12 +121,12 @@ impl DirFunciones {
     }
 
     // Busca primero en la tabla actual y luego en la global (la local tiene prioridad sobre la global).
-    pub fn buscar_variable(&self, nombre: &str) -> Result<Tipo, String> {
-        if let Some(tipo) = self.funciones[&self.actual].variables.get(nombre) {
-            return Ok(*tipo);
+    pub fn buscar_variable(&self, nombre: &str) -> Result<Variable, String> {
+        if let Some(variable) = self.funciones[&self.actual].variables.get(nombre) {
+            return Ok(*variable);
         }
-        if let Some(tipo) = self.funciones[&self.global].variables.get(nombre) {
-            return Ok(*tipo);
+        if let Some(variable) = self.funciones[&self.global].variables.get(nombre) {
+            return Ok(*variable);
         }
         Err(format!("la variable '{}' no fue declarada", nombre))
     }
@@ -105,17 +140,25 @@ impl DirFunciones {
 
     /// Tipo que debe regresar la función actual. Error si estamos en main
     /// (alcance global) o si la función es void.
-    pub fn retorno_actual(&self) -> Result<Tipo, String> {
+    pub fn retorno_actual(&self) -> Result<(Tipo, usize), String> {
         if self.actual == self.global {
             return Err("return solo se puede usar dentro de una función".to_string());
         }
-        match self.funciones[&self.actual].tipo_retorno {
-            TipoRetorno::Valor(tipo) => Ok(tipo),
-            TipoRetorno::Void => Err(format!(
+        let funcion = &self.funciones[&self.actual];
+        match (funcion.tipo_retorno, funcion.direccion_retorno) {
+            (TipoRetorno::Valor(tipo), Some(direccion)) => Ok((tipo, direccion)),
+            _ => Err(format!(
                 "la función '{}' es void y no puede regresar un valor",
                 self.actual
             )),
         }
+    }
+
+    // La función en la que estamos (o la global, en main), para modificar su inicio o recursos.
+    pub fn funcion_actual_mut(&mut self) -> &mut Funcion {
+        self.funciones
+            .get_mut(&self.actual)
+            .expect("el alcance actual siempre existe")
     }
 
     // Al terminar una función, regresa al alcance global.

@@ -57,11 +57,25 @@ extern {
 
 // <Programa> → program id ; <VarsOpt> <ListaFuncs> main <Body> end
 pub Programa: () = {
-    EncabezadoPrograma VarsOpt ListaFuncs "main" Body "end" => (),
+    EncabezadoPrograma VarsOpt ListaFuncs InicioMain Body "end" => {
+        dir.funcion_actual_mut().recursos = generador.memoria.recursos(); // temporales que usó main
+        generador.generar_end();
+    },
 };
-// Separamos la regla ya que al leer 'program nombre ;' debemos crear el Directorio con el alcance global.
+// Separamos la regla ya que al leer 'program nombre ;' debemos crear el Directorio con el alcance global
+// y generar el GOTO a main (el primer cuádruplo).
 EncabezadoPrograma: () = {
-    "program" <nombre:"id"> ";" => { *dir = DirFunciones::nuevo(&nombre); },
+    "program" <nombre:"id"> ";" => {
+        *dir = DirFunciones::nuevo(&nombre);
+        generador.generar_goto_main();
+    },
+};
+// Separamos la regla para rellenar el GOTO del inicio justo antes del código de main.
+InicioMain: () = {
+    "main" => {
+        generador.rellenar_goto_main();
+        dir.funcion_actual_mut().inicio = generador.siguiente(); // main empieza aquí
+    },
 };
 
 // ======================= Variables =======================
@@ -86,7 +100,7 @@ ListaDecl: () = {
 Decl: () = {
     <ids:ListaIds> ":" <t:Type> ";" =>? {
         for (pos, nombre) in ids {
-            dir.agregar_variable(&nombre, t).map_err(|m| error_en(pos, m))?;
+            dir.agregar_variable(&nombre, t, &mut generador.memoria).map_err(|m| error_en(pos, m))?;
         }
         Ok(())
     },
@@ -114,11 +128,22 @@ ListaFuncs: () = {
 
 // <Funcs> → <TipoFunc> id ( <ParamsOpt> ) [ <VarsOpt> <Body> ] ;
 Funcs: () = {
-    EncabezadoFunc "(" ParamsOpt ")" "[" VarsOpt Body "]" ";" => dir.salir_funcion(),
+    EncabezadoFunc "(" ParamsOpt ")" "[" VarsOpt Body "]" ";" => {
+        generador.generar_endfunc();
+        dir.funcion_actual_mut().recursos = generador.memoria.recursos(); // su tamaño para el ERA
+        dir.salir_funcion();
+        generador.memoria.reiniciar_locales(); // main empieza con sus temporales desde 5000/6000/7000
+    },
 };
 // Separamos la regla ya que la función se registra antes de leer sus parámetros y su cuerpo.
 EncabezadoFunc: () = {
-    <t:TipoFunc> <pos:@L> <nombre:"id"> =>? dir.agregar_funcion(&nombre, t).map_err(|m| error_en(pos, m)),
+    <t:TipoFunc> <pos:@L> <nombre:"id"> =>? {
+        generador.memoria.reiniciar_locales(); // la función nueva empieza sus locales desde 3000/4000
+        dir.agregar_funcion(&nombre, t, &mut generador.memoria).map_err(|m| error_en(pos, m))?;
+        // Los parámetros y las variables no generan cuádruplos, así que su código empieza en el siguiente.
+        dir.funcion_actual_mut().inicio = generador.siguiente();
+        Ok(())
+    },
 };
 
 // <TipoFunc> → void | <Type>
@@ -141,7 +166,7 @@ ListaParams: () = {
 
 // <Param> → id : <Type>
 Param: () = {
-    <pos:@L> <nombre:"id"> ":" <t:Type> =>? dir.agregar_parametro(&nombre, t).map_err(|m| error_en(pos, m)),
+    <pos:@L> <nombre:"id"> ":" <t:Type> =>? dir.agregar_parametro(&nombre, t, &mut generador.memoria).map_err(|m| error_en(pos, m)),
 };
 
 // ======================= Cuerpo y estatutos =======================
@@ -173,8 +198,8 @@ Statement: () = {
 // <Return> → return <Expresion> ;
 Return: () = {
     <pos:@L> "return" Expresion ";" =>? {
-        let tipo_funcion = dir.retorno_actual().map_err(|m| error_en(pos, m))?;
-        generador.generar_return(tipo_funcion, pos)
+        let (tipo_funcion, direccion_retorno) = dir.retorno_actual().map_err(|m| error_en(pos, m))?;
+        generador.generar_return(tipo_funcion, direccion_retorno, pos)
     },
 };
 
@@ -182,24 +207,46 @@ Return: () = {
 Assign: () = {
     <pos:@L> <nombre:"id"> "=" Expresion ";" =>? {
         let destino = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
-        generador.generar_asignacion(nombre, destino, pos)
+        generador.generar_asignacion(destino.direccion, destino.tipo, pos)
     },
 };
 
 // <Condition> → if ( <Expresion> ) <Statement> <ElseOpt> ;
+// Al terminar todo el if se rellena el salto pendiente.
 Condition: () = {
-    "if" "(" Expresion ")" Statement ElseOpt ";" => (),
+    CondicionIf Statement ElseOpt ";" => generador.generar_fin_if(),
+};
+
+// Separamos la regla para generar el GOTOF justo después de la condición, antes del Statement.
+CondicionIf: () = {
+    "if" "(" <pos:@L> Expresion ")" =>? generador.generar_gotof(pos),
 };
 
 // <ElseOpt> → else <Statement> | ε
 ElseOpt: () = {
-    "else" Statement => (),
+    InicioElse Statement => (),
     => (),
 };
 
+// Separamos la regla para generar el GOTO al leer else, antes del Statement del else.
+InicioElse: () = {
+    "else" => generador.generar_else(),
+};
+
 // <Cycle> → while ( <Expresion> ) do <Statement> ;
+// Al terminar el ciclo se genera el GOTO de regreso y se rellena el GOTOF.
 Cycle: () = {
-    "while" "(" Expresion ")" "do" Statement ";" => (),
+    InicioWhile CondicionWhile "do" Statement ";" => generador.generar_fin_while(),
+};
+
+// Separamos la regla para guardar el punto de regreso ANTES de generar la condición.
+InicioWhile: () = {
+    "while" => generador.generar_inicio_while(),
+};
+
+// Separamos la regla para generar el GOTOF justo después de la condición.
+CondicionWhile: () = {
+    "(" <pos:@L> Expresion ")" =>? generador.generar_gotof(pos),
 };
 
 // <Print> → print ( <ListaPrint> ) ;
@@ -216,14 +263,14 @@ ListaPrint: () = {
 // <ElemPrint> → <Expresion> | cte_string
 ElemPrint: () = {
     Expresion => generador.generar_print_expresion(),
-    <texto:"cte_string"> => generador.generar_print_texto(texto),
+    <pos:@L> <texto:"cte_string"> =>? generador.generar_print_texto(texto, pos),
 };
 
 // <Read> → read ( id ) ;
 Read: () = {
     "read" "(" <pos:@L> <nombre:"id"> ")" ";" =>? {
-        dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
-        generador.generar_read(nombre);
+        let variable = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
+        generador.generar_read(variable.direccion);
         Ok(())
     },
 };
@@ -234,10 +281,25 @@ FCall: () = {
 };
 
 // <Llamada> → id ( <ArgsOpt> )    (llamada usada dentro de una expresión)
-Llamada: (String, TipoRetorno) = {
-    <pos:@L> <nombre:"id"> "(" ArgsOpt ")" =>? {
-        let tipo = dir.buscar_funcion(&nombre).map_err(|m| error_en(pos, m))?.tipo_retorno;
-        Ok((nombre, tipo))
+// Al cerrar ")" se genera el GOSUB. Regresa la dirección global donde la función
+// deja su valor y su tipo (None si es void).
+Llamada: Option<(usize, Tipo)> = {
+    <inicio:InicioLlamada> ArgsOpt <pos:@L> ")" =>? {
+        generador.generar_gosub(pos)?;
+        Ok(inicio)
+    },
+};
+
+// Separamos la regla para generar el ERA al leer "id (", ANTES de traducir los argumentos.
+InicioLlamada: Option<(usize, Tipo)> = {
+    <pos:@L> <nombre:"id"> "(" =>? {
+        let funcion = dir.buscar_funcion(&nombre).map_err(|m| error_en(pos, m))?;
+        let retorno = match (funcion.tipo_retorno, funcion.direccion_retorno) {
+            (TipoRetorno::Valor(t), Some(direccion)) => Some((direccion, t)),
+            _ => None, // void
+        };
+        generador.generar_era(nombre, funcion.inicio, funcion.parametros.clone());
+        Ok(retorno)
     },
 };
 
@@ -247,10 +309,15 @@ ArgsOpt: () = {
     => (),
 };
 
-// <ListaArgs> → <ListaArgs> , <Expresion> | <Expresion>
+// <ListaArgs> → <ListaArgs> , <Argumento> | <Argumento>
 ListaArgs: () = {
-    ListaArgs "," Expresion => (),
-    Expresion => (),
+    ListaArgs "," Argumento => (),
+    Argumento => (),
+};
+
+// Cada argumento: al terminar su expresión se genera su PARAM.
+Argumento: () = {
+    <pos:@L> Expresion =>? generador.generar_param(pos),
 };
 
 // ======================= Expresiones =======================
@@ -276,23 +343,31 @@ Factor: Tipo = {
     <pos:@L> "-" Atomo =>? generador.generar_negativo(pos),
     Atomo,
     <pos:@L> <llamada:Llamada> =>? match llamada {
-        (nombre, TipoRetorno::Valor(t)) => { generador.meter_operando(nombre, t); Ok(t) },
-        (_, TipoRetorno::Void) => Err(error_en(pos, "una función void no regresa valor; no se puede usar en una expresión".to_string())),
+        Some((direccion, t)) => generador.generar_copia_retorno(direccion, t, pos),
+        None => Err(error_en(pos, "una función void no regresa valor; no se puede usar en una expresión".to_string())),
     },
 };
 
 Atomo: Tipo = {
     <pos:@L> <nombre:"id"> =>? {
-        let tipo = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
-        generador.meter_operando(nombre, tipo);
-        Ok(tipo)
+        let variable = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
+        generador.meter_operando(variable.direccion, variable.tipo);
+        Ok(variable.tipo)
     },
     Cte,
 };
 
 Cte: Tipo = {
-    <valor:"cte_int"> => { generador.meter_operando(valor.to_string(), Tipo::Int); Tipo::Int },
-    <valor:"cte_float"> => { generador.meter_operando(valor.to_string(), Tipo::Float); Tipo::Float },
+    <pos:@L> <valor:"cte_int"> =>? {
+        let direccion = generador.memoria.constante_int(valor).map_err(|m| error_en(pos, m))?;
+        generador.meter_operando(direccion, Tipo::Int);
+        Ok(Tipo::Int)
+    },
+    <pos:@L> <valor:"cte_float"> =>? {
+        let direccion = generador.memoria.constante_float(valor).map_err(|m| error_en(pos, m))?;
+        generador.meter_operando(direccion, Tipo::Float);
+        Ok(Tipo::Float)
+    },
 };
 
 

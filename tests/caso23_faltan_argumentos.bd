@@ -1,0 +1,13 @@
+program malo;
+var x : int;
+
+int suma(a : int, b : int) [
+    {
+        return a + b;
+    }
+];
+
+main {
+    x = suma(1);
+}
+end

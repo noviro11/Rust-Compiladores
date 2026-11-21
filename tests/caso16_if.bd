@@ -1,0 +1,16 @@
+program condiciones;
+var x, y : int;
+main {
+    read(x);
+    if (x > 0) [
+        y = 1;
+    ];
+    if (x < 10) [
+        print("chico");
+    ] else [
+        print("grande");
+        y = 2;
+    ];
+    print(y);
+}
+end

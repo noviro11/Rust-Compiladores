@@ -3,6 +3,7 @@ mod cuadruplos;
 mod cubo_semantico;
 mod directorio;
 mod lexer;
+mod memoria;
 
 use lalrpop_util::lalrpop_mod;
 use std::{env, fs, process};
@@ -39,6 +40,12 @@ fn main() {
                 ruta
             );
             println!("{:#?}", dir); // imprime el Directorio de Funciones completo
+            println!("--------- Tabla de constantes ---------");
+            let mut constantes: Vec<_> = generador.memoria.constantes.iter().collect();
+            constantes.sort_by_key(|(_, direccion)| **direccion); // ordenadas por dirección
+            for (valor, direccion) in constantes {
+                println!("{:>6} = {}", direccion, valor);
+            }
             println!("--------- Fila de cuádruplos ---------");
             for (i, cuadruplo) in generador.fila.iter().enumerate() {
                 println!("{:>3}. {}", i + 1, cuadruplo);

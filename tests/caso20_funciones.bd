@@ -1,0 +1,31 @@
+program funciones;
+var x, res : int;
+    prom : float;
+
+int suma(a : int, b : int) [
+    var c : int;
+    {
+        c = a + b;
+        return c;
+    }
+];
+
+float promedio(a : int, b : float) [
+    {
+        return (a + b) / 2;
+    }
+];
+
+void saluda(n : int) [
+    {
+        print("hola", n);
+    }
+];
+
+main {
+    x = 3;
+    res = suma(x, 4) * 2;
+    prom = promedio(suma(1, 2), 5.5);
+    saluda(res);
+}
+end

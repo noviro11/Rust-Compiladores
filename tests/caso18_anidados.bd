@@ -1,0 +1,15 @@
+program anidados;
+var i, pares : int;
+main {
+    i = 0;
+    pares = 0;
+    while (i < 10) do [
+        if (i != 3) [
+            pares = pares + 1;
+        ] else [
+            print("tres");
+        ];
+        i = i + 1;
+    ];
+}
+end
