@@ -4,6 +4,7 @@
 // ============================================================================
 
 use crate::baby_duck::ProgramaParser;
+use crate::cuadruplos::GeneradorCuadruplos;
 use crate::cubo_semantico::ErrorUsuario;
 use crate::directorio::DirFunciones;
 use crate::lexer::{Lexer, Token};
@@ -70,15 +71,16 @@ impl fmt::Display for ErrorBD {
     }
 }
 
-/// Analiza un programa completo. Si todo está bien, regresa el Directorio lleno.
-pub fn analizar(fuente: &str) -> Result<DirFunciones, ErrorBD> {
+/// Analiza un programa completo. Si todo está bien, regresa el Directorio y el generador (con la fila).
+pub fn analizar(fuente: &str) -> Result<(DirFunciones, GeneradorCuadruplos), ErrorBD> {
     let mut dir = DirFunciones::nuevo(""); // vacío: el nombre real lo pone EncabezadoPrograma
+    let mut generador = GeneradorCuadruplos::nuevo(); // pilas y fila vacías
     let lexer = Lexer::new(fuente).map(|r| r.map_err(ErrorUsuario::Lexico)); // 1) el scanner produce tokens…
     let parser = ProgramaParser::new(); // 2) …y el parser los consume
     parser
-        .parse(&mut dir, lexer)
+        .parse(&mut dir, &mut generador, lexer)
         .map_err(|e| traducir_error(fuente, e))?;
-    Ok(dir)
+    Ok((dir, generador))
 }
 
 /// Convierte una posición (índice en el texto) en (línea, columna), ambas desde 1.

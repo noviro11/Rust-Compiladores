@@ -1,0 +1,6 @@
+program p;
+var x : int;
+main {
+    return x;
+}
+end

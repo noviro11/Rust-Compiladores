@@ -1,4 +1,5 @@
 mod analizador;
+mod cuadruplos;
 mod cubo_semantico;
 mod directorio;
 mod lexer;
@@ -32,12 +33,16 @@ fn main() {
 
     // Parte 2: scanner + parser
     match analizador::analizar(&fuente) {
-        Ok(dir) => {
+        Ok((dir, generador)) => {
             println!(
                 "OK: '{}' es léxica, sintáctica y semánticamente correcto.",
                 ruta
             );
             println!("{:#?}", dir); // imprime el Directorio de Funciones completo
+            println!("--------- Fila de cuádruplos ---------");
+            for (i, cuadruplo) in generador.fila.iter().enumerate() {
+                println!("{:>3}. {}", i + 1, cuadruplo);
+            }
         }
         Err(e) => {
             println!("{}", e);

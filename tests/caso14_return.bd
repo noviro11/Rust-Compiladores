@@ -1,0 +1,23 @@
+program retorno;
+var x : int;
+    y : float;
+
+int doble(a : int) [
+    {
+        return a * 2;
+    }
+];
+
+float mitad(b : float) [
+    var r : float;
+    {
+        r = b / 2;
+        return r;
+    }
+];
+
+main {
+    x = doble(5) + 1;
+    y = mitad(3.0);
+}
+end

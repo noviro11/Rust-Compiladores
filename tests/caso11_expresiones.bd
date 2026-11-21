@@ -1,0 +1,10 @@
+program expresiones;
+var a, b, c, x : int;
+    y : float;
+main {
+    x = a + b * c;
+    x = (a + b) * c;
+    y = a - b / c;
+    x = a * b + c * a - b;
+}
+end

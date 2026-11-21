@@ -1,0 +1,11 @@
+program lineales;
+var x, y : int;
+    z : float;
+main {
+    read(x);
+    read(z);
+    y = -x + 3;
+    z = -3.5 * (x + 2);
+    print("resultado:", z, y * 2);
+}
+end

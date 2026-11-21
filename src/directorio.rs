@@ -103,6 +103,21 @@ impl DirFunciones {
             .ok_or(format!("la función '{}' no fue declarada", nombre))
     }
 
+    /// Tipo que debe regresar la función actual. Error si estamos en main
+    /// (alcance global) o si la función es void.
+    pub fn retorno_actual(&self) -> Result<Tipo, String> {
+        if self.actual == self.global {
+            return Err("return solo se puede usar dentro de una función".to_string());
+        }
+        match self.funciones[&self.actual].tipo_retorno {
+            TipoRetorno::Valor(tipo) => Ok(tipo),
+            TipoRetorno::Void => Err(format!(
+                "la función '{}' es void y no puede regresar un valor",
+                self.actual
+            )),
+        }
+    }
+
     // Al terminar una función, regresa al alcance global.
     pub fn salir_funcion(&mut self) {
         self.actual = self.global.clone();

@@ -1,9 +1,9 @@
 use crate::lexer::Token;
-use crate::cubo_semantico::{Operador, Tipo, TipoRetorno, ErrorUsuario, validar, error_en};
+use crate::cubo_semantico::{Operador, Tipo, TipoRetorno, ErrorUsuario, error_en};
 use crate::directorio::DirFunciones;
+use crate::cuadruplos::GeneradorCuadruplos; 
 
-grammar(dir: &mut DirFunciones);
-
+grammar(dir: &mut DirFunciones, generador: &mut GeneradorCuadruplos);
 
 // ponemos extern para que lalrpop no genere lexico sino tome el que creamos en lexer.rs
 extern {
@@ -25,6 +25,7 @@ extern {
         "do"      => Token::Do,
         "if"      => Token::If,
         "else"    => Token::Else,
+        "return" => Token::Return,
         // operadores
         "="  => Token::Asignar,
         "+"  => Token::Mas,
@@ -82,7 +83,6 @@ ListaDecl: () = {
     Decl => (),
 };
 
-// <Decl> → <ListaIds> : <Type> ;
 Decl: () = {
     <ids:ListaIds> ":" <t:Type> ";" =>? {
         for (pos, nombre) in ids {
@@ -160,6 +160,7 @@ ListaStmt: () = {
 // <Statement> → <Assign> | <Condition> | <Cycle> | <FCall> | <Print> | <Read>
 //             | [ <ListaStmt> ]
 Statement: () = {
+    Return => (),
     Assign => (),
     Condition => (),
     Cycle => (),
@@ -169,12 +170,19 @@ Statement: () = {
     "[" ListaStmt "]" => (),
 };
 
+// <Return> → return <Expresion> ;
+Return: () = {
+    <pos:@L> "return" Expresion ";" =>? {
+        let tipo_funcion = dir.retorno_actual().map_err(|m| error_en(pos, m))?;
+        generador.generar_return(tipo_funcion, pos)
+    },
+};
+
 // <Assign> → id = <Expresion> ;
 Assign: () = {
-    <pos:@L> <nombre:"id"> "=" <valor:Expresion> ";" =>? {
+    <pos:@L> <nombre:"id"> "=" Expresion ";" =>? {
         let destino = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
-        validar(Operador::Asignar, destino, valor, pos)?;
-        Ok(())
+        generador.generar_asignacion(nombre, destino, pos)
     },
 };
 
@@ -207,13 +215,17 @@ ListaPrint: () = {
 
 // <ElemPrint> → <Expresion> | cte_string
 ElemPrint: () = {
-    Expresion => (),
-    "cte_string" => (),
+    Expresion => generador.generar_print_expresion(),
+    <texto:"cte_string"> => generador.generar_print_texto(texto),
 };
 
 // <Read> → read ( id ) ;
 Read: () = {
-    "read" "(" <pos:@L> <nombre:"id"> ")" ";" =>? dir.buscar_variable(&nombre).map(|_| ()).map_err(|m| error_en(pos, m)),
+    "read" "(" <pos:@L> <nombre:"id"> ")" ";" =>? {
+        dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
+        generador.generar_read(nombre);
+        Ok(())
+    },
 };
 
 // <FCall> → <Llamada> ;          (llamada usada como estatuto)
@@ -222,8 +234,11 @@ FCall: () = {
 };
 
 // <Llamada> → id ( <ArgsOpt> )    (llamada usada dentro de una expresión)
-Llamada: TipoRetorno = {
-    <pos:@L> <nombre:"id"> "(" ArgsOpt ")" =>? dir.buscar_funcion(&nombre).map(|f| f.tipo_retorno).map_err(|m| error_en(pos, m)),
+Llamada: (String, TipoRetorno) = {
+    <pos:@L> <nombre:"id"> "(" ArgsOpt ")" =>? {
+        let tipo = dir.buscar_funcion(&nombre).map_err(|m| error_en(pos, m))?.tipo_retorno;
+        Ok((nombre, tipo))
+    },
 };
 
 // <ArgsOpt> → <ListaArgs> | ε
@@ -242,40 +257,59 @@ ListaArgs: () = {
 
 Expresion: Tipo = {
     Exp,
-    <l:@L> <izq:Exp> ">"  <der:Exp> =>? validar(Operador::Mayor, izq, der, l),
-    <l:@L> <izq:Exp> "<"  <der:Exp> =>? validar(Operador::Menor, izq, der, l),
-    <l:@L> <izq:Exp> "!=" <der:Exp> =>? validar(Operador::Diferente, izq, der, l),
+    <pos:@L> Exp OpRel Exp =>? generador.generar_operacion(pos),
 };
 
 Exp: Tipo = {
-    <l:@L> <izq:Exp> "+" <der:Termino> =>? validar(Operador::Suma, izq, der, l),
-    <l:@L> <izq:Exp> "-" <der:Termino> =>? validar(Operador::Resta, izq, der, l),
+    <pos:@L> Exp OpSuma Termino =>? generador.generar_operacion(pos),
     Termino,
 };
 
 Termino: Tipo = {
-    <l:@L> <izq:Termino> "*" <der:Factor> =>? validar(Operador::Mult, izq, der, l),
-    <l:@L> <izq:Termino> "/" <der:Factor> =>? validar(Operador::Div, izq, der, l),
+    <pos:@L> Termino OpMult Factor =>? generador.generar_operacion(pos),
     Factor,
 };
 
 Factor: Tipo = {
-    "(" <Expresion> ")",       // <...> sin nombre = regresa el valor de Expresion
+    "(" <Expresion> ")",
     "+" <Atomo>,
-    "-" <Atomo>,
+    <pos:@L> "-" Atomo =>? generador.generar_negativo(pos),
     Atomo,
-    <pos:@L> <r:Llamada> =>? match r {
-        TipoRetorno::Valor(t) => Ok(t),
-        TipoRetorno::Void => Err(error_en(pos, "una función void no regresa valor; no se puede usar en una expresión".to_string())),
+    <pos:@L> <llamada:Llamada> =>? match llamada {
+        (nombre, TipoRetorno::Valor(t)) => { generador.meter_operando(nombre, t); Ok(t) },
+        (_, TipoRetorno::Void) => Err(error_en(pos, "una función void no regresa valor; no se puede usar en una expresión".to_string())),
     },
 };
 
 Atomo: Tipo = {
-    <pos:@L> <nombre:"id"> =>? dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m)),
+    <pos:@L> <nombre:"id"> =>? {
+        let tipo = dir.buscar_variable(&nombre).map_err(|m| error_en(pos, m))?;
+        generador.meter_operando(nombre, tipo);
+        Ok(tipo)
+    },
     Cte,
 };
 
 Cte: Tipo = {
-    "cte_int"   => Tipo::Int,
-    "cte_float" => Tipo::Float,
+    <valor:"cte_int"> => { generador.meter_operando(valor.to_string(), Tipo::Int); Tipo::Int },
+    <valor:"cte_float"> => { generador.meter_operando(valor.to_string(), Tipo::Float); Tipo::Float },
+};
+
+
+// ======================= Reglas Operadores =======================
+
+OpRel: () = {
+    ">" => generador.meter_operador(Operador::Mayor),
+    "<" => generador.meter_operador(Operador::Menor),
+    "!=" => generador.meter_operador(Operador::Diferente),
+};
+
+OpSuma: () = {
+    "+" => generador.meter_operador(Operador::Suma),
+    "-" => generador.meter_operador(Operador::Resta),
+};
+
+OpMult: () = {
+    "*" => generador.meter_operador(Operador::Mult),
+    "/" => generador.meter_operador(Operador::Div),
 };
